@@ -2,8 +2,8 @@
 
 > 优惠码 **`PORTALGUN`**，购买套餐可享 **20% OFF**（八折）
 
-个人自用：用 GitHub Actions 每天定时跑一次 `checkin.py`，给 GLaDOS（`glados.cloud`
-或 `railgun.info`）签到。**签到失败时让作业变红，靠 GitHub 的失败邮件收到通知。**
+个人自用：用 GitHub Actions 每天定时跑一次 `checkin.py`，给 GLaDOS（`glados.cloud`）
+签到。**签到失败时让作业变红，靠 GitHub 的失败邮件收到通知。**
 
 | 文件 | 作用 |
 |---|---|
@@ -31,9 +31,8 @@
 - **手动触发（Actions 页面点 Run workflow）不跳过**，方便排查问题时立刻跑一次。
 - 查询运行记录失败时一律**回退为照常签到** —— 宁可多签一次，也不会静默漏签。
 
-另外工作流还有两个收尾步骤：`liskin/gh-workflow-keepalive` 防止 GitHub 因长期不活动
-自动停用定时任务；`Mattraks/delete-workflow-runs` 保留 30 天运行记录（排查漂移要看
-连续多天的实际触发时间，删太早会失去证据）。
+另外还有一个收尾步骤：`liskin/gh-workflow-keepalive` 防止 GitHub 因长期不活动自动停用
+定时任务（它靠 API 重新启用工作流，所以 workflow 里要 `permissions: actions: write`）。
 
 ## 配置
 
@@ -43,32 +42,34 @@
 |---|---|---|
 | `GLADOS_COOKIES` | 是 | 账号的会话 Cookie，见下 |
 | `GLADOS_USER_AGENT` | **强烈建议** | 登录浏览器的 `navigator.userAgent`，见下 |
-| `GLADOS_EXCHANGE_PLAN` | 否 | 积分兑换策略，默认 `plan500` |
-| `GLADOS_VERBOSE` | 否 | `true` / `false`，默认 `false` |
 
 ### GLADOS_COOKIES
 
-在**你注册的那个站点**（`glados.cloud` 或 `railgun.info`）的签到页面按 `F12` →
-`Network` → 刷新 → 点第一个请求 → `Request Headers` 里的 `Cookie` → 右键复制完整值。
+在 `glados.cloud` 的签到页面按 `F12` → `Network` → 刷新 → 点第一个请求 →
+`Request Headers` 里的 `Cookie` → 右键复制完整值。
 
-2026-09 起每个站点各有一套会话字段，**只要有一对完整就能签到**：
+2026-09 起站点把会话拆成了两个字段，**两个都要有，缺一个就不能签到**：
 
-| 你的账号在 | 需要在 `GLADOS_COOKIES` 里带的字段 |
+| 字段 | 说明 |
 |---|---|
-| GLaDOS（`glados.cloud`） | `gld:sess` + `gld:sess.sig` |
-| Railgun（`railgun.info`） | `koa:sess` + `koa:sess.sig` |
-| 两个站点都有账号 | 两对都带，用 `;` 连接 |
+| `gld:sess` | 会话 ID |
+| `gld:sess.sig` | 会话签名（漏掉它是最常见的复制错误） |
 
-脚本会把同一份 Cookie 依次发给两个域名，**不持有你账号的那个域名返回 `code -2` 是正常现象**，
-不算失败。最简单的做法是直接复制完整的 `Cookie` 值，不要手工挑字段。
+直接复制完整的 `Cookie` 值即可，不用手工挑字段：脚本只认这两个，多余的（`theme`、
+`_ga` 之类）会被忽略；但只抄了半对的话，加载阶段就会告警。
 
-多账号之间用 `&` 连接：`c1&c2&c3`。每个账号只要在自己那个站点签到成功就算成功。
+> 完整的 Cookie 里通常还带着 `koa:sess` / `koa:sess.sig` 等旧字段——那是站点自己
+> 下发的（和 `gld:*` 同时出现），不是别的站点，脚本不检查、留着无所谓。但**只有**
+> 这类旧字段而没有 `gld:*` 的话，加载阶段会告警。
+
+只支持**一个账号**。以前用 `&` 把多个 Cookie 拼在一起的写法已经去掉了——整个值会
+被当成一份 Cookie 发给站点，认不出来就是签到失败（作业变红，不会静默放过）。
 
 ### GLADOS_USER_AGENT
 
 GLaDOS 从 2026-09 起会校验「签到请求的平台」与「登录时浏览器的平台」是否一致，
-**对不上就返回 `code 4 Automated check-in detected`**，表现为一直签到失败，但
-`status` / `points` 接口都正常，很容易误判成 Cookie 坏了。
+**对不上就返回 `code 4 Automated check-in detected`**，表现为一直签到失败，但积分接口照常返回，
+很容易误判成 Cookie 坏了。
 
 在**登录 GLaDOS 的那个浏览器**里按 `F12` → `Console`，执行 `navigator.userAgent`，
 把输出原样粘成这个 secret 的值。
@@ -77,15 +78,43 @@ GLaDOS 从 2026-09 起会校验「签到请求的平台」与「登录时浏览�
 > Windows / Linux / iPhone UA 一律被判为自动签到（只改 Chrome 版本号无效）。
 > 所以**在 Windows 或 Linux 上登录的话，这一项必须配**。
 
-### GLADOS_EXCHANGE_PLAN
+### 兑换
 
-积分够就自动兑换成天数，不配置时默认 `plan500`：
+积分够就自动兑换成天数，固定用 `plan500`（500 积分换 100 天），没有开关。
 
-| 值 | 需要积分 | 兑换天数 |
-|---|---|---|
-| `plan100` | 100 | 10 天 |
-| `plan200` | 200 | 30 天 |
-| `plan500` | 500 | 100 天（默认） |
+**积分没到门槛时不会发兑换请求**，也就不会有任何报错——每天拿一个明知道会被拒的
+请求去换一句 `Not enough points` 没有意义，余额是本脚本自己刚查过的。所以结果行里
+只会带一句门槛：
+
+```
+✅ 签到成功, 获得 13 积分, 总 497 积分, 未到 500 兑换门槛
+```
+
+积分够了并且真的兑换成功时，同一行的末尾变成 `兑换成功: plan500`
+（它会真的扣掉 500 积分，所以这一行无条件输出，不会被任何开关关掉）。
+
+> 之所以只有 `plan500`：服务端在积分不够时自己回过 `Need 500`，这是唯一被真实验证过
+> 的门槛。站点说明里还有 `plan100` / `plan200`，但从没在这个脚本上验证过，所以连同
+> `GLADOS_EXCHANGE_PLAN` 这个开关一起去掉了。
+
+## 日志怎么看
+
+就一份日志，没有级别开关。正常一次运行 4 行左右，每行都在说不同的事：
+
+```
+开始签到: 兑换 plan500 (需 500 积分)
+User-Agent: 内置默认 (可用 GLADOS_USER_AGENT 覆盖为登录浏览器的 UA)
+✅ 签到成功, 获得 13 积分, 总 497 积分, 未到 500 兑换门槛
+签到完成 (退出码 0)
+```
+
+- 第 3 行是结果行：`✅ 签到成功` / `🔄 重复签到` / `❌ 签到失败`。
+- 最后一行是判定行，带退出码；失败时它是 `ERROR` 级别，作业变红。
+- **成功的请求不会逐条记录**：那些内容结果行里已经有了。
+- **失败一定有原因**：认证失败带服务端原话、`code 4` 带 `loginDevice` /
+  `currentDevice` 对比、网络错误带异常、没见过的响应直接打原始 JSON ——
+  这些都不需要额外开什么开关。
+- 请求头从不进日志，Cookie 值不会出现在任何日志里（有测试守着）。
 
 ## 通知与退出码
 
@@ -97,24 +126,25 @@ GitHub 发失败邮件**。所以别关掉 Actions 的失败通知：
 
 | 退出码 | 含义 |
 |---|---|
-| `0` | 所有账号至少在一个域名上签到成功 / 今日已签到 |
-| `1` | 有账号在所有域名上都没签到成功 → 作业变红 |
+| `0` | 签到成功 / 今日已签到 |
+| `1` | 签到失败 → 作业变红 |
 | `2` | 配置错误，例如没设 `GLADOS_COOKIES` |
 
 判定是 fail-closed 的：只有 `code 0`（签到成功）和 `code 1`（重复签到）算通过；
-认证失败、反自动化拦截、网络失败、未预期异常**全部**返回 1。
+认证失败、反自动化拦截、网络失败、未预期异常**全部**返回 1。中途异常也一样算失败 ——
+宁可多签一次，也绝不静默漏签。
 
 ## 出问题了怎么看
 
-去 Actions 里点开最近一次 `gladosCheck` 运行，看 `Running checkin` 那一步的日志。
+去 Actions 里点开最近一次 `auto check` 运行（文件是 `.github/workflows/gladosCheck.yml`），
+看 `Running checkin` 那一步的日志。
 
 | 日志现象 | 原因 | 处理 |
 |---|---|---|
-| `Cookie[n] 没有一对完整的会话字段` | 两对会话字段都不完整 | 回账号所在站点重新复制完整 Cookie |
-| `认证失败 (code -2, message: 没有权限)` | Cookie 不完整或已过期（约 30 天），或复制成了另一个站点的 Cookie | 重新登录复制；这行前面会提示该域名需要哪一对字段 |
+| `Cookie 缺少会话字段 gld:sess.sig` | 只抄了半对，或复制时被截断 | 回签到页重新复制完整 Cookie |
+| `认证失败 (code -2, message: 没有权限)` | Cookie 不完整或已过期（约 30 天） | 重新登录复制完整 Cookie；紧跟着的那行会写清需要哪几个字段 |
 | `签到被判定为自动签到` / `code 4` | 请求的平台和登录浏览器不一致 | 按上文配置 `GLADOS_USER_AGENT`；日志里会打印服务端给的 `reason` / `loginDevice` / `currentDevice` |
-| `🌐[railgun.info] ❌ { code : -2, message : No permission }` | 你的账号不在 railgun.info | 正常现象，只看有账号的那个域名是否签到成功 |
-| 作业变红，总结里 `失败2` | 该账号所有域名都没签到成功 | 按上面依次检查 Cookie 和 `GLADOS_USER_AGENT` |
+| 作业变红，末尾 `签到失败 (退出码 1)` | 这次签到没成功 | 紧跟着的那行会写下一步；再按上面依次检查 Cookie 和 `GLADOS_USER_AGENT` |
 
 日志时间戳是 **UTC**（runner 的时区），和 GitHub 日志每行自带的时间前缀一致。
 北京时间 = UTC + 8。
@@ -133,7 +163,8 @@ GLADOS_USER_AGENT='粘贴你浏览器的 navigator.userAgent' \
 ./.venv/bin/python checkin.py; echo "exit=$?"
 ```
 
-注意 `重复签到` 也是成功：`code : 1 ... observation logged` 表示服务端接受了这次请求。
+注意 `重复签到` 也是成功：站点回的是 `code 1`，表示今天这一次它已经记过了；
+退出码仍然是 `0`，不会把作业染红。
 
 ## 为什么请求要长得像浏览器
 
